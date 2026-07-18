@@ -4,7 +4,7 @@ import feedparser
 import urllib.parse
 import google.generativeai as genai
 from google.oauth2.credentials import Credentials
-from google.oauth2 import service_account # LIBRARY BARU UNTUK INDEXING
+from google.oauth2 import service_account
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from google.api_core.exceptions import ResourceExhausted
@@ -65,16 +65,18 @@ RSS_FEEDS = [
 # 3. FUNGSI UTAMA
 # ==========================================
 def ambil_riwayat_postingan():
+    """Mengambil riwayat artikel di Blogger yang berstatus AKTIF (LIVE)."""
     riwayat_konten = []
     if not BLOG_ID:
         return riwayat_konten
     try:
-        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=20)
+        # PERBAIKAN: Hanya mengambil artikel yang benar-benar tayang (status='LIVE')
+        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=30, status='LIVE')
         response = request.execute()
         posts = response.get('items', [])
         for post in posts:
             riwayat_konten.append(post.get('content', ''))
-        print(f"🔍 Sistem Anti-Duplikat aktif: Memeriksa {len(posts)} artikel terdahulu.")
+        print(f"🔍 Sistem Anti-Duplikat aktif: Memeriksa {len(posts)} artikel AKTIF terdahulu.")
     except Exception as e:
         print(f"⚠️ Gagal mengambil riwayat artikel: {e}")
     return riwayat_konten
@@ -87,6 +89,9 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
             feed = feedparser.parse(url)
             for entry in feed.entries[:limit_per_sumber]:
                 gambar_url = ""
+                # Ambil link dengan aman
+                link_asli = entry.get('link', entry.get('id', ''))
+                
                 try:
                     if 'media_content' in entry and len(entry.media_content) > 0:
                         gambar_url = entry.media_content[0].get('url', '')
@@ -107,7 +112,7 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
 
                 berita = {
                     'judul': entry.title,
-                    'link': entry.link,
+                    'link': link_asli,
                     'deskripsi': entry.get('summary', entry.get('description', '')),
                     'gambar': gambar_url
                 }
@@ -159,13 +164,11 @@ def posting_ke_blogger(judul, konten_html):
     }
     
     try:
-        # 1. Posting ke Blogger
         request = blogger_service.posts().insert(blogId=BLOG_ID, body=post_body)
         response = request.execute()
         post_url = response.get('url')
         print(f"✅ Sukses memposting: {post_url}")
 
-        # 2. Submit URL ke Google Indexing API
         if indexing_service and post_url:
             try:
                 notification = {'url': post_url, 'type': 'URL_UPDATED'}
@@ -192,7 +195,17 @@ def main():
     for index, berita in enumerate(daftar_berita):
         print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
         
-        sudah_diposting = any(berita['link'] in konten for konten in riwayat_postingan)
+        # PERBAIKAN ANTI-DUPLIKAT: 
+        # Mengecek format tag tersembunyi (akurat 100%) atau kecocokan atribut href
+        tag_pelacak = f"<!-- PELACAK_SUMBER: {berita['link']} -->"
+        link_pelacak = f'href="{berita["link"]}"'
+        
+        sudah_diposting = False
+        for konten in riwayat_postingan:
+            if tag_pelacak in konten or link_pelacak in konten:
+                sudah_diposting = True
+                break
+                
         if sudah_diposting or (berita['link'] in link_sesi_ini):
             print("⏩ Melewati berita: Sudah pernah diposting (Duplikat).")
             continue
@@ -206,10 +219,15 @@ def main():
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
+            # 1. Sisipkan Tag Pelacak Tersembunyi (agar pengecekan hari esok lebih akurat)
+            konten_artikel = f"{tag_pelacak}\n" + konten_artikel
+            
+            # 2. Masukkan Gambar
             if berita['gambar']:
                 tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
 
+            # 3. Masukkan Iklan
             kode_iklan = """
             <div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
                 <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5762789427984759" crossorigin="anonymous"></script>
