@@ -16,15 +16,13 @@ import sys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
-# PERBAIKAN: Menggunakan model yang valid (1.5-flash)
-model = genai.GenerativeModel('gemini-3.5-flash')
-
+model = genai.GenerativeModel('gemini-1.5-flash')
 BLOG_ID = os.environ.get("BLOG_ID")
 SCOPES = ['https://www.googleapis.com/auth/blogger']
 TOKEN_FILE = 'token.json'
-
 INDEXING_SCOPES = ['https://www.googleapis.com/auth/indexing']
 INDEXING_KEY_FILE = 'service_account.json'
+HISTORY_FILE = 'history.txt' # File penyimpan riwayat
 
 # --- Inisialisasi Blogger API ---
 try:
@@ -48,38 +46,48 @@ try:
         indexing_service = build('indexing', 'v3', credentials=idx_creds)
         print("✅ Google Indexing API siap digunakan.")
     else:
-        print("⚠️ File service_account.json tidak ditemukan. Melewati fitur Auto-Indexing.")
+        print("⚠️ File service_account.json tidak ditemukan.")
 except Exception as e:
     print(f"⚠️ Gagal menginisialisasi Indexing API: {e}")
 
 # ==========================================
-# 2. DAFTAR SUMBER RSS (KHUSUS K-POP & K-DRAMA)
+# 2. DAFTAR SUMBER RSS (K-POP INTERNASIONAL & LOKAL)
 # ==========================================
-# Menggunakan Google News agar anti-blokir dan mendapatkan berita terbaru dalam 24 jam terakhir (when:1d)
 RSS_FEEDS = [
+    "https://www.soompi.com/feed",
+    "https://www.allkpop.com/rss",
+    "https://www.koreaboo.com/feed/",
     "https://news.google.com/rss/search?q=Artis+Korea+OR+Drama+Korea+when:1d&hl=id&gl=ID&ceid=ID:id",
-    "https://news.google.com/rss/search?q=Idol+Kpop+OR+Blackpink+OR+BTS+when:1d&hl=id&gl=ID&ceid=ID:id",
-    "https://news.google.com/rss/search?q=Dating+Korea+OR+Gosip+Artis+Korea+when:1d&hl=id&gl=ID&ceid=ID:id",
-    "https://news.google.com/rss/search?q=K-Pop+OR+Agensi+Korea+when:1d&hl=id&gl=ID&ceid=ID:id"
+    "https://news.google.com/rss/search?q=Gosip+Dating+Idol+Kpop+when:1d&hl=id&gl=ID&ceid=ID:id"
 ]
 
 # ==========================================
 # 3. FUNGSI UTAMA
 # ==========================================
+def muat_riwayat_lokal():
+    """Membaca file history.txt jika ada."""
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            return set(line.strip() for line in f if line.strip())
+    return set()
+
+def simpan_riwayat_lokal(link):
+    """Menyimpan link ke file history.txt."""
+    with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
+        f.write(f"{link}\n")
+
 def ambil_riwayat_postingan():
-    """Mengambil riwayat artikel di Blogger yang berstatus AKTIF (LIVE)."""
+    """Mengambil riwayat artikel di Blogger sebagai backup pengecekan."""
     riwayat_konten = []
-    if not BLOG_ID:
-        return riwayat_konten
+    if not BLOG_ID: return riwayat_konten
     try:
-        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=30, status='LIVE')
+        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=40, status='LIVE')
         response = request.execute()
         posts = response.get('items', [])
         for post in posts:
             riwayat_konten.append(post.get('content', ''))
-        print(f"🔍 Sistem Anti-Duplikat aktif: Memeriksa {len(posts)} artikel AKTIF terdahulu.")
-    except Exception as e:
-        print(f"⚠️ Gagal mengambil riwayat artikel: {e}")
+    except Exception:
+        pass
     return riwayat_konten
 
 def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
@@ -90,7 +98,6 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
             feed = feedparser.parse(url)
             for entry in feed.entries[:limit_per_sumber]:
                 gambar_url = ""
-                # Ambil link dengan aman
                 link_asli = entry.get('link', entry.get('id', ''))
                 
                 try:
@@ -105,7 +112,6 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
                         gambar_url = entry.media_thumbnail[0].get('url', '')
                         
                     if not gambar_url:
-                        # PROMPT GAMBAR KHUSUS K-POP
                         prompt_gambar = f"High quality cinematic photo, Korean celebrity, K-Pop idol, glamorous style, illustration of: {entry.title}"
                         prompt_aman = urllib.parse.quote(prompt_gambar)
                         gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
@@ -124,7 +130,6 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
     return semua_berita
 
 def tulis_artikel_dengan_gemini(berita):
-    # PROMPT AI KHUSUS GAYA BAHASA K-POPERS / K-NETZ
     prompt = f"""
     Bertindaklah sebagai jurnalis hiburan dan K-netz (Netizen Korea) atau K-Popers sejati yang julid, *up-to-date*, dan bersemangat. 
     Tulis ulang berita dunia hiburan Korea berikut ke dalam bahasa Indonesia yang sensasional, memancing rasa penasaran (kepo), kekinian ala anak K-Pop, dan SEO friendly.
@@ -134,86 +139,90 @@ def tulis_artikel_dengan_gemini(berita):
     Deskripsi: {berita['deskripsi']}
     
     Syarat penulisan:
-    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dengan isi berita (boleh pakai sedikit istilah seru seperti 'Daebak', 'Omo', dll jika cocok).
-    2. Tulis isi artikel minimal 8 paragraf dengan gaya bahasa asyik dan gaul ala K-Popers (bisa menyapa pembaca dengan sebutan 'Chingu' atau 'Yeorobun').
-    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>, <em>) agar siap diposting di Blogger.
-    4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
-    5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
+    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan.
+    2. Tulis isi artikel minimal 8 paragraf dengan gaya bahasa asyik (bisa menyapa 'Chingu' atau 'Yeorobun').
+    3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>).
+    4. Jangan masukkan tag <html>, <head>, atau <body>.
+    5. Berikan kredit sumber berita di akhir artikel (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
     """
-    
     for attempt in range(3):
         try:
             response = model.generate_content(prompt)
             return response.text
         except ResourceExhausted:
             wait_time = (attempt + 1) * 30
-            print(f"⚠️ Limit API Gemini tercapai. Menunggu {wait_time} detik...")
+            print(f"⚠️ Limit API Gemini. Menunggu {wait_time} detik...")
             time.sleep(wait_time)
         except Exception as e:
-            print(f"Error saat memanggil Gemini: {e}")
+            print(f"Error Gemini: {e}")
             return None
-            
     return None
 
 def posting_ke_blogger(judul, konten_html):
-    if not BLOG_ID:
-        print("❌ BLOG_ID tidak ditemukan!")
-        return
-
-    # LABEL KHUSUS K-POP
+    if not BLOG_ID: return False
     post_body = {
         'title': judul,
         'content': konten_html,
-        'labels': ['K-Pop', 'Gosip Artis Korea', 'Drama Korea', 'Selebriti K-Pop']
+        'labels': ['K-Pop', 'Gosip Artis Korea', 'Drama Korea']
     }
-    
     try:
         request = blogger_service.posts().insert(blogId=BLOG_ID, body=post_body)
         response = request.execute()
         post_url = response.get('url')
         print(f"✅ Sukses memposting: {post_url}")
-
+        
         if indexing_service and post_url:
             try:
                 notification = {'url': post_url, 'type': 'URL_UPDATED'}
                 indexing_service.urlNotifications().publish(body=notification).execute()
-                print(f"🚀 [AUTO-INDEX] Ping berhasil! URL telah disubmit ke Google Search.")
-            except Exception as idx_err:
-                print(f"⚠️ [AUTO-INDEX] Gagal submit ke Google Search: {idx_err}")
-                
+                print(f"🚀 [AUTO-INDEX] Ping berhasil!")
+            except Exception:
+                pass
+        return True
     except Exception as e:
-        print(f"❌ Gagal memposting ke Blogger: {e}")
+        print(f"❌ Gagal memposting: {e}")
+        return False
 
 # ==========================================
 # 4. EKSEKUSI PROGRAM
 # ==========================================
 def main():
-    print("=== Memulai Auto-Blogger Gosip K-Pop & K-Drama ===")
+    print("=== Memulai Auto-Blogger Gosip K-Pop ===")
     
-    riwayat_postingan = ambil_riwayat_postingan()
+    # Memuat daftar link yang pernah diposting dari history.txt
+    riwayat_lokal = muat_riwayat_lokal()
+    print(f"📂 Ditemukan {len(riwayat_lokal)} riwayat di history.txt")
+    
+    # Backup: Memuat riwayat dari Blogger
+    riwayat_blogger = ambil_riwayat_postingan()
     link_sesi_ini = set() 
     
     daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=3)
-    print(f"Ditemukan total {len(daftar_berita)} gosip/berita dari RSS.")
+    print(f"Ditemukan total {len(daftar_berita)} berita dari RSS.")
     
     for index, berita in enumerate(daftar_berita):
         print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
         
+        if not berita['link'] or len(berita['link']) < 5:
+            continue
+
+        # 1. CEK HISTORY LOKAL (Sangat Cepat & Akurat)
+        if berita['link'] in riwayat_lokal:
+            print("⏩ Melewati berita: Sudah tercatat di history.txt (Duplikat).")
+            continue
+            
+        # 2. CEK HISTORY BLOGGER (Backup)
         tag_pelacak = f""
-        link_pelacak = f'href="{berita["link"]}"'
-        
-        sudah_diposting = False
-        for konten in riwayat_postingan:
-            if tag_pelacak in konten or link_pelacak in konten:
-                sudah_diposting = True
-                break
+        sudah_diposting = any(tag_pelacak in konten for konten in riwayat_blogger)
                 
         if sudah_diposting or (berita['link'] in link_sesi_ini):
-            print("⏩ Melewati berita: Sudah pernah diposting (Duplikat).")
+            print("⏩ Melewati berita: Ditemukan di Blog (Duplikat).")
+            # Jika ada di blog tapi belum ada di file history, kita simpan
+            simpan_riwayat_lokal(berita['link'])
+            riwayat_lokal.add(berita['link'])
             continue
             
         link_sesi_ini.add(berita['link'])
-
         hasil_gemini = tulis_artikel_dengan_gemini(berita)
         
         if hasil_gemini:
@@ -221,28 +230,18 @@ def main():
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
-            # 1. Sisipkan Tag Pelacak Tersembunyi
             konten_artikel = f"{tag_pelacak}\n" + konten_artikel
-            
-            # 2. Masukkan Gambar
             if berita['gambar']:
                 tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
 
-            # 3. Masukkan Iklan
-            kode_iklan = """
-            <div style="margin-top: 30px; margin-bottom: 20px; text-align: center;">
-                <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5762789427984759" crossorigin="anonymous"></script>
-            </div>
-            """
-            konten_artikel = konten_artikel + kode_iklan
-
-            posting_ke_blogger(judul_baru, konten_artikel)
+            # Jika berhasil diposting ke Blogger, simpan ke file history.txt!
+            if posting_ke_blogger(judul_baru, konten_artikel):
+                simpan_riwayat_lokal(berita['link'])
+                riwayat_lokal.add(berita['link'])
             
-            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya (Anti-Limit)...")
+            print("⏳ Menunggu 20 detik sebelum memproses berita selanjutnya...")
             time.sleep(20)
-        else:
-            print(f"Gagal di-generate, melewati artikel: {berita['judul']}")
 
     print("\n=== Proses Auto-Blogger Selesai ===")
 
