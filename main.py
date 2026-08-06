@@ -16,6 +16,7 @@ import sys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
+# PERBAIKAN: Menggunakan model yang valid (1.5-flash)
 model = genai.GenerativeModel('gemini-3.5-flash')
 
 BLOG_ID = os.environ.get("BLOG_ID")
@@ -52,13 +53,14 @@ except Exception as e:
     print(f"⚠️ Gagal menginisialisasi Indexing API: {e}")
 
 # ==========================================
-# 2. DAFTAR SUMBER RSS (GOSIP & HIBURAN)
+# 2. DAFTAR SUMBER RSS (KHUSUS K-POP & K-DRAMA)
 # ==========================================
+# Menggunakan Google News agar anti-blokir dan mendapatkan berita terbaru dalam 24 jam terakhir (when:1d)
 RSS_FEEDS = [
-    "https://www.tmz.com/rss.xml",
-    "https://www.eonline.com/syndication/feeds/rssfeeds/topstories.xml",
-    "https://ew.com/feed/",
-    "https://www.billboard.com/feed/"
+    "https://news.google.com/rss/search?q=Artis+Korea+OR+Drama+Korea+when:1d&hl=id&gl=ID&ceid=ID:id",
+    "https://news.google.com/rss/search?q=Idol+Kpop+OR+Blackpink+OR+BTS+when:1d&hl=id&gl=ID&ceid=ID:id",
+    "https://news.google.com/rss/search?q=Dating+Korea+OR+Gosip+Artis+Korea+when:1d&hl=id&gl=ID&ceid=ID:id",
+    "https://news.google.com/rss/search?q=K-Pop+OR+Agensi+Korea+when:1d&hl=id&gl=ID&ceid=ID:id"
 ]
 
 # ==========================================
@@ -70,7 +72,6 @@ def ambil_riwayat_postingan():
     if not BLOG_ID:
         return riwayat_konten
     try:
-        # PERBAIKAN: Hanya mengambil artikel yang benar-benar tayang (status='LIVE')
         request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=30, status='LIVE')
         response = request.execute()
         posts = response.get('items', [])
@@ -104,7 +105,8 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
                         gambar_url = entry.media_thumbnail[0].get('url', '')
                         
                     if not gambar_url:
-                        prompt_gambar = f"High quality cinematic paparazzi style photo, celebrity news, dramatic lighting, illustration of: {entry.title}"
+                        # PROMPT GAMBAR KHUSUS K-POP
+                        prompt_gambar = f"High quality cinematic photo, Korean celebrity, K-Pop idol, glamorous style, illustration of: {entry.title}"
                         prompt_aman = urllib.parse.quote(prompt_gambar)
                         gambar_url = f"https://image.pollinations.ai/prompt/{prompt_aman}?width=800&height=400&nologo=true"
                 except Exception:
@@ -122,17 +124,18 @@ def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
     return semua_berita
 
 def tulis_artikel_dengan_gemini(berita):
+    # PROMPT AI KHUSUS GAYA BAHASA K-POPERS / K-NETZ
     prompt = f"""
-    Bertindaklah sebagai jurnalis hiburan dan penulis gosip selebriti yang berani, tajam, dan profesional. 
-    Tulis ulang berita dunia hiburan berikut ke dalam bahasa Indonesia yang sensasional, memancing rasa penasaran (kepo), kekinian, dan SEO friendly.
+    Bertindaklah sebagai jurnalis hiburan dan K-netz (Netizen Korea) atau K-Popers sejati yang julid, *up-to-date*, dan bersemangat. 
+    Tulis ulang berita dunia hiburan Korea berikut ke dalam bahasa Indonesia yang sensasional, memancing rasa penasaran (kepo), kekinian ala anak K-Pop, dan SEO friendly.
     
     Data Berita Asli:
     Judul: {berita['judul']}
     Deskripsi: {berita['deskripsi']}
     
     Syarat penulisan:
-    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dengan isi berita.
-    2. Tulis isi artikel minimal 8 paragraf dengan gaya bahasa asyik (bisa menggunakan sedikit bahasa gaul populer tapi tetap rapi).
+    1. Buat Judul baru yang sangat clickbait, heboh, namun tetap relevan dengan isi berita (boleh pakai sedikit istilah seru seperti 'Daebak', 'Omo', dll jika cocok).
+    2. Tulis isi artikel minimal 8 paragraf dengan gaya bahasa asyik dan gaul ala K-Popers (bisa menyapa pembaca dengan sebutan 'Chingu' atau 'Yeorobun').
     3. Format artikel harus menggunakan tag HTML (seperti <h2>, <p>, <strong>, <em>) agar siap diposting di Blogger.
     4. Jangan masukkan tag <html>, <head>, atau <body>, cukup isi artikelnya saja.
     5. Berikan kredit sumber berita di akhir artikel dengan format HTML link (Sumber: <a href="{berita['link']}">{berita['link']}</a>).
@@ -157,10 +160,11 @@ def posting_ke_blogger(judul, konten_html):
         print("❌ BLOG_ID tidak ditemukan!")
         return
 
+    # LABEL KHUSUS K-POP
     post_body = {
         'title': judul,
         'content': konten_html,
-        'labels': ['Gosip Terpanas', 'Selebriti Dunia', 'Berita Hiburan']
+        'labels': ['K-Pop', 'Gosip Artis Korea', 'Drama Korea', 'Selebriti K-Pop']
     }
     
     try:
@@ -184,7 +188,7 @@ def posting_ke_blogger(judul, konten_html):
 # 4. EKSEKUSI PROGRAM
 # ==========================================
 def main():
-    print("=== Memulai Auto-Blogger Gosip Hiburan ===")
+    print("=== Memulai Auto-Blogger Gosip K-Pop & K-Drama ===")
     
     riwayat_postingan = ambil_riwayat_postingan()
     link_sesi_ini = set() 
@@ -195,9 +199,7 @@ def main():
     for index, berita in enumerate(daftar_berita):
         print(f"\n[{index + 1}/{len(daftar_berita)}] Mengecek berita: {berita['judul']}")
         
-        # PERBAIKAN ANTI-DUPLIKAT: 
-        # Mengecek format tag tersembunyi (akurat 100%) atau kecocokan atribut href
-        tag_pelacak = f"<!-- PELACAK_SUMBER: {berita['link']} -->"
+        tag_pelacak = f""
         link_pelacak = f'href="{berita["link"]}"'
         
         sudah_diposting = False
@@ -219,7 +221,7 @@ def main():
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
-            # 1. Sisipkan Tag Pelacak Tersembunyi (agar pengecekan hari esok lebih akurat)
+            # 1. Sisipkan Tag Pelacak Tersembunyi
             konten_artikel = f"{tag_pelacak}\n" + konten_artikel
             
             # 2. Masukkan Gambar
