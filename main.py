@@ -16,13 +16,13 @@ import sys
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 genai.configure(api_key=GEMINI_API_KEY)
 
-model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-3.5-flash')
 BLOG_ID = os.environ.get("BLOG_ID")
 SCOPES = ['https://www.googleapis.com/auth/blogger']
 TOKEN_FILE = 'token.json'
 INDEXING_SCOPES = ['https://www.googleapis.com/auth/indexing']
 INDEXING_KEY_FILE = 'service_account.json'
-HISTORY_FILE = 'history.txt' # File penyimpan riwayat
+HISTORY_FILE = 'history.txt' 
 
 # --- Inisialisasi Blogger API ---
 try:
@@ -65,30 +65,14 @@ RSS_FEEDS = [
 # 3. FUNGSI UTAMA
 # ==========================================
 def muat_riwayat_lokal():
-    """Membaca file history.txt jika ada."""
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
             return set(line.strip() for line in f if line.strip())
     return set()
 
 def simpan_riwayat_lokal(link):
-    """Menyimpan link ke file history.txt."""
     with open(HISTORY_FILE, 'a', encoding='utf-8') as f:
         f.write(f"{link}\n")
-
-def ambil_riwayat_postingan():
-    """Mengambil riwayat artikel di Blogger sebagai backup pengecekan."""
-    riwayat_konten = []
-    if not BLOG_ID: return riwayat_konten
-    try:
-        request = blogger_service.posts().list(blogId=BLOG_ID, maxResults=40, status='LIVE')
-        response = request.execute()
-        posts = response.get('items', [])
-        for post in posts:
-            riwayat_konten.append(post.get('content', ''))
-    except Exception:
-        pass
-    return riwayat_konten
 
 def dapatkan_berita_dari_rss(rss_urls, limit_per_sumber=3):
     semua_berita = []
@@ -189,12 +173,10 @@ def posting_ke_blogger(judul, konten_html):
 def main():
     print("=== Memulai Auto-Blogger Gosip K-Pop ===")
     
-    # Memuat daftar link yang pernah diposting dari history.txt
+    # KINI HANYA MENGANDALKAN HISTORY LOKAL
     riwayat_lokal = muat_riwayat_lokal()
     print(f"📂 Ditemukan {len(riwayat_lokal)} riwayat di history.txt")
     
-    # Backup: Memuat riwayat dari Blogger
-    riwayat_blogger = ambil_riwayat_postingan()
     link_sesi_ini = set() 
     
     daftar_berita = dapatkan_berita_dari_rss(RSS_FEEDS, limit_per_sumber=3)
@@ -206,20 +188,9 @@ def main():
         if not berita['link'] or len(berita['link']) < 5:
             continue
 
-        # 1. CEK HISTORY LOKAL (Sangat Cepat & Akurat)
-        if berita['link'] in riwayat_lokal:
-            print("⏩ Melewati berita: Sudah tercatat di history.txt (Duplikat).")
-            continue
-            
-        # 2. CEK HISTORY BLOGGER (Backup)
-        tag_pelacak = f""
-        sudah_diposting = any(tag_pelacak in konten for konten in riwayat_blogger)
-                
-        if sudah_diposting or (berita['link'] in link_sesi_ini):
-            print("⏩ Melewati berita: Ditemukan di Blog (Duplikat).")
-            # Jika ada di blog tapi belum ada di file history, kita simpan
-            simpan_riwayat_lokal(berita['link'])
-            riwayat_lokal.add(berita['link'])
+        # 1. CEK HISTORY LOKAL (Mutlak)
+        if (berita['link'] in riwayat_lokal) or (berita['link'] in link_sesi_ini):
+            print("⏩ Melewati berita: Sudah diposting sebelumnya (Duplikat).")
             continue
             
         link_sesi_ini.add(berita['link'])
@@ -230,12 +201,15 @@ def main():
             judul_baru = baris_teks[0].replace('<h1>', '').replace('</h1>', '').replace('##', '').replace('**', '').strip()
             konten_artikel = '\n'.join(baris_teks[1:]).replace('```html', '').replace('```', '')
             
-            konten_artikel = f"{tag_pelacak}\n" + konten_artikel
+            # Tag pelacak (opsional untuk rekam jejak internal)
+            tag_pelacak = f"\n"
+            konten_artikel = tag_pelacak + konten_artikel
+            
             if berita['gambar']:
                 tag_gambar = f'<div style="text-align: center; margin-bottom: 20px;"><img src="{berita["gambar"]}" alt="{judul_baru}" style="max-width: 100%; height: auto; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1);" /></div>\n'
                 konten_artikel = tag_gambar + konten_artikel
 
-            # Jika berhasil diposting ke Blogger, simpan ke file history.txt!
+            # Jika berhasil diposting ke Blogger, simpan ke file history.txt
             if posting_ke_blogger(judul_baru, konten_artikel):
                 simpan_riwayat_lokal(berita['link'])
                 riwayat_lokal.add(berita['link'])
